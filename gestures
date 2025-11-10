@@ -512,93 +512,98 @@ def test(device_event_name, factor, dev):
             if not events:
                 continue
 
-            try:
-                event_data = fd.read(EVENT_SIZE)
+            # Drain all available events to reduce syscalls/context switches
+            while True:
+                try:
+                    event_data = fd.read(EVENT_SIZE)
 
-                # If we couldn't read a complete event, continue
-                if not event_data or len(event_data) != EVENT_SIZE:
-                    continue
+                    # If we couldn't read a complete event, break drain loop
+                    if not event_data or len(event_data) != EVENT_SIZE:
+                        break
 
-                # Unpack the event data
-                sec, usec, ev_type, ev_code, ev_value = struct.unpack(FORMAT, event_data)
+                    # Unpack the event data
+                    sec, usec, ev_type, ev_code, ev_value = struct.unpack(FORMAT, event_data)
 
-                # Format time like evtest does
-                time_str = f"{sec}.{usec:06d}"
+                    # Format time like evtest does
+                    time_str = f"{sec}.{usec:06d}"
 
-                # Only process relevant event types
-                if ev_type != EV_ABS:
-                    continue
-
-                # Process tracking ID events
-                if ev_code == ABS_MT_TRACKING_ID:
-                    if ev_value == -1 or ev_value == 0xffffffff:  # -1 in unsigned 32-bit
-                        try:
-                            del status_dict[slot]
-                        except KeyError:
-                            pass
-
-                        # Notify worker to flush queue after finger is removed
-                        q.put({"type": "finger_remove", "removed_slot": slot, "time": time_str})
-                        slot = "-1"
-                    else:
-                        if slot == "-1":
-                            slot = "0"
-                        status_dict[slot] = {"x_updated": 0, "y_updated": 0}
-
-                # Process slot change events
-                elif ev_code == ABS_MT_SLOT:
-                    slot = str(ev_value)
-                    if slot not in status_dict:
-                        status_dict[slot] = {"x_updated": 0, "y_updated": 0}
-
-                # Process X position events
-                elif ev_code == ABS_MT_POSITION_X:
-                    if slot != "-1":
-                        if swap_x_y:
-                            status_dict[slot]["y"] = float(ev_value) / factor * orientation_y
-                            status_dict[slot]["y_updated"] += 1
-                        else:
-                            status_dict[slot]["x"] = float(ev_value) / factor * orientation_x
-                            status_dict[slot]["x_updated"] += 1
-                        update = True
-
-                # Process Y position events
-                elif ev_code == ABS_MT_POSITION_Y:
-                    if slot != "-1":
-                        if swap_x_y:
-                            status_dict[slot]["x"] = float(ev_value) / factor * orientation_x
-                            status_dict[slot]["x_updated"] += 1
-                        else:
-                            status_dict[slot]["y"] = float(ev_value) / factor * orientation_y
-                            status_dict[slot]["y_updated"] += 1
-                        update = True
-
-                print("")
-                print(f"update: {update}")
-                print(f"slot: {slot}")
-                print(f"status_dict: {status_dict}")
-                print("")
-
-                if update:
-                    if status_dict[slot]["x_updated"] < 1 or status_dict[slot]["y_updated"] < 1:
-                        update = False
+                    # Only process relevant event types
+                    if ev_type != EV_ABS:
                         continue
 
-                    x = status_dict[slot]["x"]
-                    y = status_dict[slot]["y"]
+                    # Process tracking ID events
+                    if ev_code == ABS_MT_TRACKING_ID:
+                        if ev_value == -1 or ev_value == 0xffffffff:  # -1 in unsigned 32-bit
+                            try:
+                                del status_dict[slot]
+                            except KeyError:
+                                pass
 
-                    if "objs" not in status_dict[slot]:
-                        status_dict[slot]["objs"] = True
-                        finger_type = "finger_start"
-                    else:
-                        finger_type = "finger_update"
+                            # Notify worker to flush queue after finger is removed
+                            q.put({"type": "finger_remove", "removed_slot": slot, "time": time_str})
+                            slot = "-1"
+                        else:
+                            if slot == "-1":
+                                slot = "0"
+                            status_dict[slot] = {"x_updated": 0, "y_updated": 0}
 
-                    update = False
-                    q.put({"type": finger_type, "slot": slot, "time": time_str, slot: {"x": x, "y": y}})
+                    # Process slot change events
+                    elif ev_code == ABS_MT_SLOT:
+                        slot = str(ev_value)
+                        if slot not in status_dict:
+                            status_dict[slot] = {"x_updated": 0, "y_updated": 0}
 
-            except IOError:
-                # No data available right now
-                continue
+                    # Process X position events
+                    elif ev_code == ABS_MT_POSITION_X:
+                        if slot != "-1":
+                            if swap_x_y:
+                                status_dict[slot]["y"] = float(ev_value) / factor * orientation_y
+                                status_dict[slot]["y_updated"] += 1
+                            else:
+                                status_dict[slot]["x"] = float(ev_value) / factor * orientation_x
+                                status_dict[slot]["x_updated"] += 1
+                            update = True
+
+                    # Process Y position events
+                    elif ev_code == ABS_MT_POSITION_Y:
+                        if slot != "-1":
+                            if swap_x_y:
+                                status_dict[slot]["x"] = float(ev_value) / factor * orientation_x
+                                status_dict[slot]["x_updated"] += 1
+                            else:
+                                status_dict[slot]["y"] = float(ev_value) / factor * orientation_y
+                                status_dict[slot]["y_updated"] += 1
+                            update = True
+
+                    print("")
+                    print(f"update: {update}")
+                    print(f"slot: {slot}")
+                    print(f"status_dict: {status_dict}")
+                    print("")
+
+                    if update:
+                        if status_dict[slot]["x_updated"] < 1 or status_dict[slot]["y_updated"] < 1:
+                            update = False
+                            continue
+
+                        x = status_dict[slot]["x"]
+                        y = status_dict[slot]["y"]
+
+                        if "objs" not in status_dict[slot]:
+                            status_dict[slot]["objs"] = True
+                            finger_type = "finger_start"
+                        else:
+                            finger_type = "finger_update"
+
+                        update = False
+                        q.put({"type": finger_type, "slot": slot, "time": time_str, slot: {"x": x, "y": y}})
+
+                except BlockingIOError:
+                    # No further data at the moment
+                    break
+                except IOError:
+                    # No data available right now
+                    break
 
     except Exception as e:
         print(f"Error: {e}")
