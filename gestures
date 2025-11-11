@@ -414,7 +414,7 @@ class Worker(threading.Thread):
         structure = self.gesture["type"];
         try:
             rep =  self.gestures[structure.type][structure.fingers][structure.direction]["rep"];
-            if type(rep) == int:
+            if type(rep) is int:
                 return rep
             else:
                 raise Exception
